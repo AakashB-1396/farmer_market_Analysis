@@ -1,0 +1,224 @@
+---
+title: "Project-Farmers Market"
+author: "Aakash Bolisetty"
+date: "2/24/2020"
+output: html_document
+---
+```{r libraries}
+library(usmap)
+library(ggplot2)
+library(tidyr)
+library(reshape2)
+library(dplyr)
+library(lubridate)
+library(treemapify)
+```
+
+```{r setup data, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#creating a theme for plot
+text_theme <- theme(
+plot.title = element_text(color="black", size=14, face="bold.italic"),
+axis.title.x = element_text(color="black", size=14, face="bold"),
+axis.title.y = element_text(color="black", size=14, face="bold")
+)
+ 
+#creating a regions key
+region_key <- data.frame(state.name, state.region,stringsAsFactors=FALSE)
+region_key[nrow(region_key) + 1,] = c("District of Columbia","South")
+
+#import the data set
+fmarket <- read.csv("~/Downloads/fmarket.csv", na.strings="", stringsAsFactors=FALSE)
+
+#dataframe with season 1 being split
+fmarket<-fmarket%>%
+  separate(Season1Date, c("StartS1", "EndS1"), " to ")
+
+fmarket$DaysCount<-as.Date(fmarket$EndS1, format="%m/%d/%Y")-as.Date(fmarket$StartS1, format="%m/%d/%Y")
+
+#based on years
+fmarket_years <- fmarket%>%
+  filter(!is.na(fmarket$DaysCount) & fmarket$DaysCount > 0)
+fmarket_years$Year <- year(as.Date(fmarket_years$StartS1, format = "%m/%d/%Y"))
+
+```
+
+#Taking a count of the farmer markets across the United States of America from 2010-2020
+
+```{r Farmer markets across the map}
+farmers <- fmarket%>%
+  group_by(State)%>%
+  summarise(count=n())
+
+farmers$fips <- fips(farmers$State)
+
+plot_usmap(data = farmers, values = "count", color = "black",labels = T,label_color = 'white') + 
+  scale_fill_continuous(name = "Farmer markets count", label = scales::comma) + 
+  labs(title = "US States", subtitle = "Number of Farmer markets from 2010-2020")+
+  theme(legend.position = "right")
+#(plot)%>%ggsave("US Map Farmer Markets.png", . , dpi = 400, width = 8, height = 8)
+
+```
+
+#number of farmer markets per year
+
+```{r farmer markets per year}
+(fmarket_years %>%
+  filter(Year!=2020)%>%
+  group_by(Year)%>%
+   summarise(Count=n())%>%
+  select(Year,Count)%>%
+mutate(Year_count=cumsum(Count))%>%
+  ggplot(aes(x=factor(Year), y=Year_count, group=1)) +
+  geom_line(color="red")+geom_point()+ labs(title = "Number of Farmer Markets", subtitle = "From 2011-2019") +xlab("Years") + ylab("Number of Farmer markets")+
+  labs(color="Years")+text_theme)%>%ggsave("Farmer Market per Year.png", . , dpi = 400, width = 8, height = 4)
+#(plot)%>%ggsave("Farmer Market per Year.png", . , dpi = 400, width = 8, height = 8)
+```
+
+
+#Statistics of the locations being used for the farmers markets
+
+```{r Locations used}
+fmarket%>%
+  group_by(Location)%>%
+  summarise(count=n())%>%
+  drop_na()%>%
+  ggplot(aes(area=count,label=Location,fill=Location))+geom_treemap()+ 
+  geom_treemap_text(fontface = "italic", colour = "white", place = "centre",grow = FALSE)+
+  ggtitle("Locations used for the markets")+text_theme
+#(plot)%>%ggsave("Locations Used.png", . , dpi = 400, width = 8, height = 8)
+```
+
+#Visuals of the payment methods being used over the years based on region
+
+```{r spread of payment methods}
+payment_methods <- dplyr::select(fmarket,State,Credit,WIC,WICcash,SFMNP,SNAP)
+payment_methods <- left_join(payment_methods,region_key,by = c("State" = "state.name"))
+payment_methods <- select (payment_methods,-c(1))
+payment_methods[-c(6)] <- lapply(payment_methods[-6], function(x) as.integer(x=="Y"))
+payment_methods%>%
+  group_by(state.region)%>%
+  summarise(Credit=sum(Credit),WIC=sum(WIC),WICcash=sum(WICcash),SFMNP=sum(SFMNP),
+            SNAP=sum(SNAP))%>%
+   melt() %>% 
+   filter(!is.na(state.region)) %>% 
+   ggplot(aes(x=reorder(variable,-value),y=state.region, fill= value)) + 
+   geom_tile()+
+   scale_fill_gradient(low = "#56B1F7", high ="#132B43" )+
+   geom_text(aes(label = value),color = "white") +
+   ggtitle("Heatmap of Payment types") +  
+   xlab("Payment types") + ylab("Regions")+
+   labs(fill = "Number of users")+
+   theme(panel.border = element_rect(colour = "darkblue", fill=NA, size=1))+text_theme
+#(plot)%>%ggsave("Payment methods region.png", . , dpi = 400, width = 8, height = 8)
+```
+
+#payment methods through the years 2013 - 2019
+
+```{r}
+fmarket_years <- left_join(fmarket_years,region_key,by = c("State" = "state.name"))
+fmarket_years <- fmarket_years[!is.na(fmarket_years$state.region),]
+payment_methods_years <- dplyr::select(fmarket_years,state.region,Year,Credit,WIC,WICcash,SFMNP,SNAP)
+payment_methods_years[-c(1:2)] <- lapply(payment_methods_years[-c(1:2)],
+                                         function(x) as.integer(x=="Y"))
+pm_years<-payment_methods_years%>%
+  group_by(state.region,Year)%>%
+  summarise(Credit=sum(Credit),WIC=sum(WIC),WICcash=sum(WICcash),SFMNP=sum(SFMNP),
+            SNAP=sum(SNAP))%>%
+  melt(id=c(1:2)) %>% 
+  filter(Year>2012 & Year <2020)
+pm_years$C_value <- ave(pm_years$value,paste0(pm_years$state.region,pm_years$variable),  FUN=cumsum)
+
+ggplot(pm_years,aes(x=factor(Year),y=C_value,group=variable,color=variable))+
+  geom_line()+ geom_point()+
+  ggtitle("Payment types through the years") + 
+  xlab("Years") + ylab("Number of Markets")+
+  labs(color = "Payment methods")+
+  theme(panel.border = element_rect(colour = "darkblue", fill=NA, size=1),
+                     axis.text.x = element_text(angle=90))+
+  facet_grid(~state.region,scales="free_y")+text_theme
+#(plot)%>%ggsave("Payment methods through years.png", . , dpi = 400, width = 8, height = 8)
+```
+
+#Social media usage
+
+```{r}
+social_media <- dplyr::select(fmarket,Website,Facebook,Twitter,Youtube,OtherMedia)
+social_media_lf <- gather(social_media,key="SocialMedia",value=measurement)
+social_media_lf %>%
+   filter(!is.na(measurement))%>%
+   group_by(SocialMedia) %>%
+  summarise(Count=n())%>%
+  ggplot(aes(x=reorder(SocialMedia,-Count),y=Count,fill=SocialMedia))+
+  geom_bar(stat="identity")+
+  ggtitle("Social Media Usage") + 
+  xlab("Social Media") + ylab("Number of Markets")+
+  labs(fill = "Social Media")+
+  theme(panel.border = element_rect(colour = "darkblue", fill=NA, size=1))+
+  text_theme
+  
+#(plot)%>%ggsave("Payment methods through years.png", . , dpi = 400, width = 8, height = 4)
+```
+
+
+
+#Usage of social media over the years
+
+```{r social media usage}
+social_media_years <- dplyr::select(fmarket_years,Year,Website,Facebook,Twitter,Youtube,OtherMedia)
+social_media_years[-c(1)] <- lapply(social_media_years[-c(1)],
+                                         function(x) as.integer(!is.na(x)))
+social_media_years <- social_media_years%>%
+  group_by(Year) %>%
+  filter(!Year<=2012 & !Year>2019)%>%
+  drop_na() %>%
+  summarise(Website=sum(Website),Facebook=sum(Facebook),
+            Twitter=sum(Twitter),Youtube=sum(Youtube),OtherMedia=sum(OtherMedia))%>%
+  melt(id="Year")
+social_media_years$C_value <- ave(social_media_years$value,social_media_years$variable,  FUN=cumsum)
+
+ggplot(social_media_years,aes(x=factor(Year),y=C_value,group=variable,color=variable))+
+  geom_line()+geom_point()+
+  ggtitle("Use of Social Media") + 
+  xlab("Years") + ylab("Number of users")+labs(color="Social Media")+
+  theme_dark()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=3))+text_theme
+#(plot)%>%ggsave("Social media.png", . , dpi = 400, width = 8, height = 8)
+```
+
+#Sales of products in different regions
+
+```{r}
+product_sales <- left_join(fmarket,region_key,by = c("State" = "state.name"))
+cols <- c(62, 30:59)
+product_sales<-product_sales[,cols]
+product_sales[-1]<-lapply(product_sales[-1],function(x) as.integer(x=="Y"))
+product_sales%>%
+  group_by(state.region)%>%
+  summarise_if(is.numeric,sum)%>%
+  drop_na()%>%
+  melt(id="state.region")%>%
+  ggplot(aes(fill=state.region, y=log(value), x=reorder(variable,-value),label = value)) + 
+  geom_bar( stat="identity")+
+  ggtitle("Region based sales for various products") + 
+  xlab("Products") + ylab("Number of users(Log scale)")+labs(fill="Regions")+
+  geom_text(color = "white",size = 3, position = position_stack(vjust = 0.5))+ 
+  theme(panel.border = element_rect(colour = "darkblue", fill=NA, size=1),
+        axis.text.x = element_text(angle=90))+coord_flip()+text_theme
+
+#(plot)%>%ggsave("Product sales region.png", . , dpi = 400, width = 8, height = 8)
+ 
+```
+
+#number of days a farmer market remains open
+
+```{r number of days for farmer markets}
+fmarket_years %>%
+  filter(fmarket_years$DaysCount <= 365)%>%
+  ggplot(aes(x=DaysCount,fill=state.region))+geom_density(alpha=0.3)+
+  ggtitle("Farmer market open days based on region") + 
+  xlab("Number of days") + ylab("Density")+labs(fill="Regions")+
+  facet_grid(.~state.region)+text_theme
+#(plot)%>%ggsave("Farmer markets open days.png", . , dpi = 400, width = 8, height = 8)
+```
+
